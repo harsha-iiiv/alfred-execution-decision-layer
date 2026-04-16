@@ -2,9 +2,9 @@
 
 Prototype for alfred_'s execution decision challenge: a debug-first UI for deciding whether the assistant should execute silently, execute and tell the user after, confirm first, ask a clarifying question, or refuse / escalate.
 
-Live URL: pending deployment
+Live URL: https://harsha-iiiv.github.io/alfred-execution-decision-layer/
 
-GitHub repo: pending repository creation
+GitHub repo: https://github.com/harsha-iiiv/alfred-execution-decision-layer
 
 ## What this prototype does
 
