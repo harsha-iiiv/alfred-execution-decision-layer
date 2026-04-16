@@ -472,19 +472,13 @@ function safeFallbackDecision(signals: ComputedSignals): Decision {
     return 'refuse_or_escalate'
   }
 
-  if (
-    signals.missingCriticalContext.length > 0 ||
-    signals.unresolvedParameters.length > 0 ||
-    signals.entityAmbiguity ||
-    signals.contradictoryHistory
-  ) {
-    return 'ask_a_clarifying_question'
+  // Timeout / parser failure should never reduce caution below the computed floor.
+  if (signals.deterministicFloor !== 'execute_silently') {
+    return signals.deterministicFloor
   }
 
-  if (signals.riskBand === 'high' || signals.riskBand === 'critical') {
-    return 'confirm_before_executing'
-  }
-
+  // Even when the floor allows silence, uncertainty in the model path should
+  // still produce a visible post-action message rather than silent execution.
   return 'execute_and_tell_user_after'
 }
 
