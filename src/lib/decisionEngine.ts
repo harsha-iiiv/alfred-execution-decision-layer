@@ -196,6 +196,12 @@ function computeSignals(input: ScenarioInput): ComputedSignals {
   if (input.userState.autonomyMode === 'high') {
     riskScore -= 8
   }
+  if (input.userState.trustLevel >= 0.85) {
+    riskScore -= 4
+  }
+  if (input.userState.trustLevel <= 0.45) {
+    riskScore += 8
+  }
   if (
     input.userState.standingAutomation &&
     input.userState.quietModeAllowed &&
@@ -324,11 +330,72 @@ ${JSON.stringify(
   )}`
 }
 
-function simulateModelDecision(
+function extractPromptContext(prompt: string) {
+  const marker = 'Context JSON:\n'
+  const index = prompt.indexOf(marker)
+
+  if (index === -1) {
+    throw new Error('Prompt is missing context JSON.')
+  }
+
+  return JSON.parse(prompt.slice(index + marker.length)) as {
+    input: ScenarioInput
+    computed_signals: ComputedSignals
+  }
+}
+
+function chooseModelDecision(
   input: ScenarioInput,
   signals: ComputedSignals,
-): ParsedModelDecision {
-  const decision = signals.recommendedDecision
+): Decision {
+  if (signals.policyBlockReason) {
+    return 'refuse_or_escalate'
+  }
+
+  if (
+    signals.missingCriticalContext.length > 0 ||
+    signals.unresolvedParameters.length > 0 ||
+    signals.entityAmbiguity
+  ) {
+    return 'ask_a_clarifying_question'
+  }
+
+  if (signals.contradictoryHistory) {
+    if (signals.pendingConfirmation && signals.vagueLatestAffirmation) {
+      return 'confirm_before_executing'
+    }
+
+    return 'ask_a_clarifying_question'
+  }
+
+  if (
+    signals.riskBand === 'critical' &&
+    signals.destructiveAction &&
+    !input.proposedAction.reversible
+  ) {
+    return 'refuse_or_escalate'
+  }
+
+  if (
+    signals.externalImpact ||
+    signals.legalOrPricingContent ||
+    signals.riskScore >= 35 ||
+    (input.userState.prefersHeadsUpForExternal &&
+      input.proposedAction.affectsExternalParty)
+  ) {
+    return 'confirm_before_executing'
+  }
+
+  if (!signals.quietModeAllowed || input.userState.trustLevel < 0.55) {
+    return 'execute_and_tell_user_after'
+  }
+
+  return 'execute_silently'
+}
+
+function simulateModelDecision(prompt: string): ParsedModelDecision {
+  const { input, computed_signals: signals } = extractPromptContext(prompt)
+  const decision = chooseModelDecision(input, signals)
   const missingInformation = [
     ...signals.missingCriticalContext,
     ...signals.unresolvedParameters,
@@ -403,16 +470,21 @@ function simulateModelDecision(
 
   return {
     decision,
-    rationale: buildModelRationale(decision),
+    rationale: buildModelRationale(decision, signals),
     user_message: userMessage,
-    confidence: signals.riskBand === 'critical' ? 0.96 : 0.82,
+    confidence:
+      signals.entityAmbiguity || signals.contradictoryHistory
+        ? 0.61
+        : signals.riskBand === 'critical'
+          ? 0.94
+          : 0.8,
     key_signals: keySignals,
     missing_information: missingInformation,
     follow_up_question: followUpQuestion,
   }
 }
 
-function buildModelRationale(decision: Decision) {
+function buildModelRationale(decision: Decision, signals: ComputedSignals) {
   if (decision === 'execute_silently') {
     return 'The action is low-risk, reversible, internally scoped, and aligned with a standing automation preference that allows quiet execution.'
   }
@@ -422,7 +494,9 @@ function buildModelRationale(decision: Decision) {
   }
 
   if (decision === 'confirm_before_executing') {
-    return 'Intent is resolved, but the action crosses the silent execution threshold because of external impact or higher operational risk.'
+    return signals.contradictoryHistory
+      ? 'The latest message leans toward approval, but earlier conversation context introduced a meaningful safety constraint, so confirmation is safer than acting silently.'
+      : 'Intent is resolved, but the action crosses the silent execution threshold because of external impact or higher operational risk.'
   }
 
   if (decision === 'ask_a_clarifying_question') {
@@ -599,8 +673,7 @@ function finalUserMessage(
 }
 
 async function getRawModelOutput(
-  input: ScenarioInput,
-  signals: ComputedSignals,
+  prompt: string,
   failureMode: FailureMode,
 ) {
   await new Promise((resolve) => window.setTimeout(resolve, 250))
@@ -613,7 +686,7 @@ async function getRawModelOutput(
     return `decision: confirm_before_executing\nreason: This feels risky and I want a confirmation first.`
   }
 
-  const response = simulateModelDecision(input, signals)
+  const response = simulateModelDecision(prompt)
   return JSON.stringify(response, null, 2)
 }
 
@@ -629,7 +702,7 @@ export async function runDecisionPipeline(
   let modelStatus: DecisionTrace['modelStatus'] = 'ok'
 
   try {
-    rawModelOutput = await getRawModelOutput(input, signals, failureMode)
+    rawModelOutput = await getRawModelOutput(prompt, failureMode)
     parsedDecision = parseModelOutput(rawModelOutput)
   } catch (error) {
     if (error instanceof Error && error.message === 'MODEL_TIMEOUT') {

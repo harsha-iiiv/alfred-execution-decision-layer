@@ -11,7 +11,7 @@ GitHub repo: https://github.com/harsha-iiiv/alfred-execution-decision-layer
 - Accepts a proposed action plus contextual conversation state.
 - Computes deterministic safety and ambiguity signals in code.
 - Builds the exact model prompt from those normalized inputs.
-- Runs a model adapter and shows the raw unparsed output.
+- Runs a simulated model judge that consumes the exact prompt and shows the raw unparsed output.
 - Parses the output into a structured decision.
 - Applies a deterministic safety gate so uncertain or malformed outputs never silently execute risky actions.
 
@@ -26,10 +26,10 @@ The UI exposes the full trace:
 
 ## Scenario coverage
 
-The demo ships with 7 preloaded scenarios:
+The demo ships with 8 preloaded scenarios:
 
 - 2 clear / easy cases
-- 3 ambiguous or judgment-heavy cases
+- 4 ambiguous or judgment-heavy cases
 - 2 risky / adversarial cases
 
 Included examples:
@@ -39,6 +39,7 @@ Included examples:
 - Multi-attendee board meeting reschedule that should confirm before acting
 - Conflicting "send it" after an earlier legal hold
 - Ambiguous "Sarah" lunch reschedule
+- Stale "send it" after a prior hold, where the safety gate overrides the simulated judge
 - Bulk destructive inbox deletion
 - Sensitive external data-share request
 
@@ -89,7 +90,7 @@ Computed deterministically:
 - whether the action is even eligible for silent execution
 - fallback behavior after timeout or malformed output
 
-Chosen by the model adapter:
+Chosen by the simulated model adapter:
 
 - which decision to take within the allowed safety envelope
 - explanation of the choice
@@ -128,9 +129,13 @@ Default safe behavior never silently executes when the system is uncertain.
 
 ## One important scoping choice
 
-To keep the deployed demo fully inspectable and free of server-side secrets, the shipped app uses a local model adapter that simulates the model interface and raw JSON output shape. The rest of the pipeline is structured exactly as it would be with a real LLM call: prompt construction, raw output capture, strict parsing, fallback behavior, and deterministic safety gating.
+To keep the deployed demo fully inspectable and free of server-side secrets, the shipped app uses a local simulated model judge that reads the exact prompt, parses the structured context, and emits raw JSON in the same shape a real model call would return. The rest of the pipeline is structured exactly as it would be with a real LLM call: prompt construction, raw output capture, strict parsing, fallback behavior, and deterministic safety gating.
 
 If I were productionizing this next, I would swap `getRawModelOutput` in [`src/lib/decisionEngine.ts`](./src/lib/decisionEngine.ts) for a real server-side model call and keep the rest of the pipeline unchanged.
+
+The simulated judge is intentionally not a direct echo of the deterministic recommendation. It can disagree with the rules layer, and the safety gate then decides whether to accept or override that judgment.
+
+One preloaded scenario (`stale-send-after-hold`) exists specifically to make that visible in the UI: the simulated judge leans toward confirmation, while the deterministic gate forces a clarifying question because the thread contains a prior hold.
 
 ## How I would evolve this as alfred_ gets riskier tools
 
@@ -162,6 +167,7 @@ Build and lint:
 ```bash
 npm run build
 npm run lint
+npm run verify:scenarios
 ```
 
 ## Deployment
